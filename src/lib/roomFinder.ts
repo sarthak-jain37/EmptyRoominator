@@ -81,6 +81,7 @@ export function findFreeRooms(
   const freeRooms: FreeRoom[] = [];
   for (const [room, capacity] of Object.entries(data.roomCapacities)) {
     if (busyRooms.has(room)) continue;
+    if (room.toUpperCase() === 'N/A') continue;
     // Only include rooms that match the selected component type(s)
     if (componentFilter.length > 0 && !roomsByComponent.has(room)) continue;
     freeRooms.push({ room, capacity });

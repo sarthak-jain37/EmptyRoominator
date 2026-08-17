@@ -14,9 +14,7 @@
   let loading = $state(true);
   let loadError = $state("");
 
-  // Upload
-  let isDragging = $state(false);
-  let dataSource: "bundled" | "uploaded" = $state("bundled");
+
 
   // Search filters
   let selectedDays: string[] = $state(["Mon"]);
@@ -62,7 +60,6 @@
       const res = await fetch("/schedule_data.json");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       scheduleData = await res.json();
-      dataSource = "bundled";
     } catch (e) {
       loadError = `Failed to load bundled data: ${(e as Error).message}`;
     } finally {
@@ -70,150 +67,7 @@
     }
   });
 
-  // ─── File upload logic ────────────────────────────────────────────────────────
-  function handleFileChange(e: Event) {
-    const input = e.target as HTMLInputElement;
-    if (input.files?.[0]) processFile(input.files[0]);
-  }
 
-  function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    isDragging = false;
-    const file = e.dataTransfer?.files?.[0];
-    if (file) processFile(file);
-  }
-
-  async function processFile(file: File) {
-    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
-      alert("Please upload an Excel (.xlsx) file.");
-      return;
-    }
-    loading = true;
-    loadError = "";
-    try {
-      const XLSX = (window as any).XLSX;
-      if (!XLSX) throw new Error("XLSX library not loaded yet, please wait.");
-      const ab = await file.arrayBuffer();
-      const wb = XLSX.read(ab, { type: "array", cellDates: true });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw: any[][] = XLSX.utils.sheet_to_json(ws, {
-        header: 1,
-        raw: false,
-        dateNF: "HH:MM:SS",
-      });
-
-      const headers = raw[0] as string[];
-      const COL = {
-        course: headers.indexOf("Course Code"),
-        title: headers.indexOf("Course Title"),
-        component: headers.indexOf("Component"),
-        day: headers.indexOf("Day"),
-        startTime: headers.indexOf("Start Time"),
-        endTime: headers.indexOf("End Time"),
-        room: headers.indexOf("Room"),
-        capacity: headers.indexOf("Section Capacity"),
-        term: headers.indexOf("Term"),
-        instructor: headers.indexOf("Instructor(s)"),
-      };
-
-      const validComponents = new Set(["LEC", "TUT", "PRAC"]);
-      const validDays = new Set(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
-      const roomMaxCap: Record<string, number> = {};
-      const schedule: any[] = [];
-
-      for (let i = 1; i < raw.length; i++) {
-        const row = raw[i];
-        const room = String(row[COL.room] ?? "").trim();
-
-        if (!room || room === "Online") continue;
-
-        const cap = parseInt(String(row[COL.capacity] ?? "0")) || 0;
-        roomMaxCap[room] = Math.max(roomMaxCap[room] ?? 0, cap);
-
-        const comp = String(row[COL.component] ?? "").trim();
-        const day = String(row[COL.day] ?? "").trim();
-        const startStr = String(row[COL.startTime] ?? "").trim();
-        const endStr = String(row[COL.endTime] ?? "").trim();
-
-        if (
-          !validComponents.has(comp) ||
-          !validDays.has(day) ||
-          !startStr ||
-          !endStr
-        )
-          continue;
-
-        const start = parseTimeString(startStr);
-        const end = parseTimeString(endStr);
-        if (start === -1 || end === -1 || start >= end) continue;
-
-        schedule.push({
-          course: String(row[COL.course] ?? ""),
-          title: String(row[COL.title] ?? ""),
-          component: comp,
-          day,
-          start,
-          end,
-          room,
-          capacity: cap,
-          term: String(row[COL.term] ?? ""),
-          instructor: String(row[COL.instructor] ?? ""),
-        });
-      }
-
-      // 2. Process bottom lists (Row 1187+)
-      for (let i = 1187; i < raw.length; i++) {
-        const row = raw[i];
-        const r1 = String(row[2] ?? "").trim();
-        const c1 = parseInt(String(row[3] ?? "0")) || 0;
-        if (r1 && r1 !== "Room")
-          roomMaxCap[r1] = Math.max(roomMaxCap[r1] ?? 0, c1);
-        const r2 = String(row[5] ?? "").trim();
-        const c2 = parseInt(String(row[6] ?? "0")) || 0;
-        if (
-          r2 &&
-          r2 !== "Free Rooms" &&
-          r2 !== "Course Code" &&
-          r2 !== "Component"
-        )
-          roomMaxCap[r2] = Math.max(roomMaxCap[r2] ?? 0, c2);
-      }
-
-      scheduleData = { schedule, roomCapacities: roomMaxCap };
-      dataSource = "uploaded";
-      freeRooms = [];
-      searchTriggered = false;
-    } catch (err) {
-      loadError = `Failed to parse Excel: ${(err as Error).message}`;
-    } finally {
-      loading = false;
-    }
-  }
-
-  function parseTimeString(s: string): number {
-    if (!s) return -1;
-    s = s.trim().toUpperCase();
-    const isPM = s.includes("PM");
-    const isAM = s.includes("AM");
-    const timePart = s.replace(/(AM|PM)/g, "").trim();
-
-    const parts = timePart.split(":");
-    if (parts.length >= 2) {
-      let h = parseInt(parts[0]);
-      let m = parseInt(parts[1]);
-      if (!isNaN(h) && !isNaN(m)) {
-        if (isPM && h !== 12) h += 12;
-        if (isAM && h === 12) h = 0;
-        return h * 60 + m;
-      }
-    }
-    const num = parseFloat(s);
-    if (!isNaN(num) && num >= 0 && num < 1) {
-      const totalMin = Math.round(num * 24 * 60);
-      return totalMin;
-    }
-    return -1;
-  }
 
   // ─── Search ────────────────────────────────────────────────────────────────────
   function search() {
@@ -324,9 +178,7 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
     rel="stylesheet"
   />
-  <script
-    src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
-  ></script>
+
 </svelte:head>
 
 <div class="app">
@@ -345,35 +197,8 @@
           {:else if scheduleData}
             <span class="text-muted">
               Loaded {Object.keys(scheduleData.roomCapacities).length} rooms
-              {#if dataSource === "uploaded"}<span class="badge"
-                  >Custom upload</span
-                >{/if}
             </span>
           {/if}
-        </div>
-        <div
-          class="btn btn-sm"
-          role="button"
-          tabindex="0"
-          ondragover={(e) => {
-            e.preventDefault();
-            isDragging = true;
-          }}
-          ondragleave={() => (isDragging = false)}
-          ondrop={handleDrop}
-          onclick={() => document.getElementById("xlsx-upload")?.click()}
-          onkeydown={(e) =>
-            e.key === "Enter" &&
-            document.getElementById("xlsx-upload")?.click()}
-        >
-          Upload Timetable
-          <input
-            id="xlsx-upload"
-            type="file"
-            accept=".xlsx,.xls"
-            onchange={handleFileChange}
-            style="display:none"
-          />
         </div>
       </div>
     </div>
@@ -381,7 +206,7 @@
     <div class="card search-card">
       <div class="filters-grid">
         <div class="field">
-          <label>Days & Times</label>
+          <span class="field-label">Days & Times</span>
           <div class="day-rows">
             {#each DAYS as day}
               <div class="day-row">
@@ -412,8 +237,8 @@
         </div>
 
         <div class="field">
-          <label>Term</label>
-          <select class="input" bind:value={termFilter}>
+          <label for="term-select">Term</label>
+          <select id="term-select" class="input" bind:value={termFilter}>
             {#each TERMS as t}
               <option value={t}>{t === "Any" ? "Any Period" : t}</option>
             {/each}
@@ -421,7 +246,7 @@
         </div>
 
         <div class="field">
-          <label>Show Room Types</label>
+          <span class="field-label">Show Room Types</span>
           <div class="pills">
             {#each COMPONENTS as comp}
               <button
@@ -433,8 +258,9 @@
         </div>
 
         <div class="field">
-          <label>Min Capacity ({minCapacity || "Any"})</label>
+          <label for="min-cap">Min Capacity ({minCapacity || "Any"})</label>
           <input
+            id="min-cap"
             type="range"
             class="input range"
             min="0"
@@ -592,11 +418,6 @@
     font-weight: 600;
     letter-spacing: -0.02em;
   }
-  .tagline {
-    color: var(--text-secondary);
-    margin-top: 0.5rem;
-  }
-
   .card {
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -639,23 +460,13 @@
     border-color: var(--text-secondary);
   }
 
-  .badge {
-    display: inline-flex;
-    padding: 0.15rem 0.5rem;
-    font-size: 0.7rem;
-    border-radius: 4px;
-    background: var(--bg-hover);
-    color: var(--text-secondary);
-    margin-left: 0.5rem;
-  }
-
   .filters-grid {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
     margin-bottom: 1.5rem;
   }
-  .field label {
+  .field label, .field-label {
     display: block;
     font-size: 0.85rem;
     color: var(--text-secondary);
