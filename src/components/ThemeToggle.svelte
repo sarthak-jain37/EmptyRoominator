@@ -60,11 +60,13 @@
     border-radius: 8px;
     padding: 2px;
     gap: 2px;
+    flex-shrink: 0;
   }
 
   .toggle-btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 5px;
     border: none;
     background: transparent;
@@ -76,6 +78,12 @@
     cursor: pointer;
     transition: all 0.15s ease;
     user-select: none;
+    flex-shrink: 0;
+  }
+
+  .toggle-btn svg {
+    display: block;
+    flex-shrink: 0;
   }
 
   .toggle-btn:hover {
@@ -93,8 +101,7 @@
       display: none;
     }
     .toggle-btn {
-      padding: 6px;
+      padding: 6px 8px;
     }
   }
 </style>
-

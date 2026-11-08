@@ -78,9 +78,15 @@
     box-sizing: border-box;
   }
 
+  :global(html),
   :global(body) {
     margin: 0;
     padding: 0;
+    width: 100%;
+    overflow-x: hidden;
+  }
+
+  :global(body) {
     background-color: var(--bg-page);
     color: var(--text-primary);
     min-height: 100vh;
@@ -91,5 +97,8 @@
     display: flex;
     flex-direction: column;
     min-height: 100vh;
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
   }
 </style>

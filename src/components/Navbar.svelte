@@ -6,20 +6,51 @@
 
 <header class="navbar">
   <div class="nav-container">
-    <div class="brand">
-      <div class="logo-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect>
-          <path d="M9 3v18"></path>
-          <path d="M14 9h4"></path>
-          <path d="M14 15h4"></path>
-        </svg>
+    <div class="nav-top-row">
+      <div class="brand">
+        <div class="logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect>
+            <path d="M9 3v18"></path>
+            <path d="M14 9h4"></path>
+            <path d="M14 15h4"></path>
+          </svg>
+        </div>
+        <span class="brand-name">EmptyRoominator</span>
       </div>
-      <span class="brand-name">EmptyRoominator</span>
+
+      <div class="desktop-actions">
+        <nav class="nav-links" aria-label="Main Navigation">
+          <button
+            type="button"
+            class="nav-tab"
+            class:active={currentTab === "search"}
+            onclick={() => onSelectTab("search")}
+          >
+            Find a Room
+          </button>
+          <button
+            type="button"
+            class="nav-tab"
+            class:active={currentTab === "explore"}
+            onclick={() => onSelectTab("explore")}
+          >
+            Explore Rooms
+          </button>
+        </nav>
+
+        <div class="divider"></div>
+
+        <ThemeToggle />
+      </div>
+
+      <div class="mobile-theme-toggle">
+        <ThemeToggle />
+      </div>
     </div>
 
-    <div class="nav-actions">
-      <nav class="nav-links" aria-label="Main Navigation">
+    <div class="mobile-nav-bar">
+      <nav class="nav-links mobile-links" aria-label="Mobile Navigation">
         <button
           type="button"
           class="nav-tab"
@@ -37,10 +68,6 @@
           Explore Rooms
         </button>
       </nav>
-
-      <div class="divider"></div>
-
-      <ThemeToggle />
     </div>
   </div>
 </header>
@@ -61,9 +88,15 @@
     margin: 0 auto;
     padding: 0.75rem 1.25rem;
     display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .nav-top-row {
+    display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    width: 100%;
   }
 
   .brand {
@@ -82,6 +115,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-primary);
+    flex-shrink: 0;
   }
 
   .brand-name {
@@ -91,10 +125,18 @@
     color: var(--text-primary);
   }
 
-  .nav-actions {
+  .desktop-actions {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+  }
+
+  .mobile-theme-toggle {
+    display: none;
+  }
+
+  .mobile-nav-bar {
+    display: none;
   }
 
   .nav-links {
@@ -117,6 +159,7 @@
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s ease;
+    white-space: nowrap;
   }
 
   .nav-tab:hover {
@@ -135,17 +178,40 @@
     background: var(--border-subtle);
   }
 
+  /* Responsive Mobile Adaptation */
   @media (max-width: 640px) {
     .nav-container {
-      padding: 0.625rem 1rem;
+      padding: 0.6rem 1rem;
+      gap: 0.5rem;
     }
+
     .brand-name {
       font-size: 0.95rem;
     }
-    .nav-tab {
-      padding: 5px 8px;
-      font-size: 0.75rem;
+
+    .desktop-actions {
+      display: none;
+    }
+
+    .mobile-theme-toggle {
+      display: block;
+    }
+
+    .mobile-nav-bar {
+      display: block;
+      width: 100%;
+    }
+
+    .mobile-links {
+      width: 100%;
+      display: flex;
+    }
+
+    .mobile-links .nav-tab {
+      flex: 1;
+      text-align: center;
+      padding: 6px 0;
+      font-size: 0.8rem;
     }
   }
 </style>
-
