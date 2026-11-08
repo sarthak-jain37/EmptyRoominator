@@ -1,635 +1,296 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { ScheduleData, FreeRoom, ScheduleEntry } from "$lib/types";
-  import {
-    findFreeRooms,
-    timeToMinutes,
-    minutesToTime,
-    getRoomSchedule,
-  } from "$lib/roomFinder";
-  import type { TimeQuery } from "$lib/roomFinder";
+  import Navbar from "../components/Navbar.svelte";
+  import SearchPanel from "../components/SearchPanel.svelte";
+  import ResultsList from "../components/ResultsList.svelte";
+  import RoomScheduleModal from "../components/RoomScheduleModal.svelte";
+  import RoomBrowser from "../components/RoomBrowser.svelte";
+  import EmptyState from "../components/EmptyState.svelte";
+  import Footer from "../components/Footer.svelte";
 
-  // ─── State ───────────────────────────────────────────────────────────────────
-  let scheduleData: ScheduleData | null = $state(null);
+  import type { TimetableData, MultiPhaseTimetableData, PhaseTimetableData, RoomAvailabilityResult, DaySchedule } from "$lib/types";
+  import {
+    getDefaultTimes,
+    minutesToTimeString,
+    timeStringToMinutes,
+    getCurrentSemesterPhase,
+    OPERATING_START,
+    OPERATING_END
+  } from "$lib/time";
+  import { searchAvailableRooms, getRoomDaySchedule } from "$lib/availability";
+
+  // ─── State ──────────────────────────────────────────────────────────────────
+  let rawTimetableData: MultiPhaseTimetableData | PhaseTimetableData | null = null;
+  let selectedTermPhase: "first_half" | "second_half" = $state("first_half");
+  let timetable: TimetableData | null = $state(null);
   let loading = $state(true);
   let loadError = $state("");
 
+  // Tab: "search" or "explore"
+  let currentTab: "search" | "explore" = $state("search");
 
+  // Search parameters
+  let availableBlocks: string[] = $state([]);
+  let selectedBlock = $state("ALL");
+  let selectedDay = $state("Mon");
+  let startTimeStr = $state("09:00");
+  let endTimeStr = $state("10:00");
 
-  // Search filters
-  let selectedDays: string[] = $state(["Mon"]);
-  let dayQueries: Record<string, { start: string; end: string }> = $state({
-    Mon: { start: "09:00", end: "11:00" },
-    Tue: { start: "09:00", end: "11:00" },
-    Wed: { start: "09:00", end: "11:00" },
-    Thu: { start: "09:00", end: "11:00" },
-    Fri: { start: "09:00", end: "11:00" },
-    Sat: { start: "09:00", end: "11:00" },
+  // Active search context (frozen to the parameters that were actually searched)
+  let activeSearchParams = $state({
+    block: "ALL",
+    day: "Mon",
+    startTimeStr: "09:00",
+    endTimeStr: "10:00"
   });
-  let termFilter = $state("Any");
-  let componentFilter: string[] = $state(["LEC", "TUT", "PRAC"]);
-  let minCapacity = $state(0);
+
+  // Search results
+  let searchResults: RoomAvailabilityResult[] = $state([]);
   let searchTriggered = $state(false);
 
-  // Results
-  let freeRooms: FreeRoom[] = $state([]);
-  let filteredRooms: FreeRoom[] = $state([]);
-  let searchLoading = $state(false);
+  // Room schedule modal
+  let modalRoom: string | null = $state(null);
+  let modalBlock: string = $state("");
+  let modalDay: string = $state("Mon");
+  let modalSchedule: DaySchedule | null = $state(null);
 
-  // Room detail modal
-  let selectedRoom: string | null = $state(null);
-  let roomDaySchedule: ScheduleEntry[] = $state([]);
-
-  // Sorting
-  let sortBy: "capacity" | "name" = $state("capacity");
-  let sortDir: "asc" | "desc" = $state("desc");
-
-  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const TERMS = [
-    "Any",
-    "Full semester",
-    "First half",
-    "Second half",
-    "Both half",
-  ];
-  const COMPONENTS = ["LEC", "TUT", "PRAC"];
-
-  // ─── Load bundled data ────────────────────────────────────────────────────────
+  // ─── Initialize default time & data ──────────────────────────────────────────
   onMount(async () => {
+    // 1. Set current time & semester phase defaults
+    selectedTermPhase = getCurrentSemesterPhase();
+    const defaults = getDefaultTimes();
+    selectedDay = defaults.day;
+    startTimeStr = minutesToTimeString(defaults.startMinutes);
+    endTimeStr = minutesToTimeString(defaults.endMinutes);
+
+    // 2. Fetch timetable.json
     try {
-      const res = await fetch("/schedule_data.json");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      scheduleData = await res.json();
-    } catch (e) {
-      loadError = `Failed to load bundled data: ${(e as Error).message}`;
+      const res = await fetch("/timetable.json");
+      if (!res.ok) {
+        throw new Error(`Failed to load timetable data: HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      rawTimetableData = data;
+
+      // Check if schema has first_half / second_half structure
+      if (data.first_half && data.second_half) {
+        timetable = (data as MultiPhaseTimetableData)[selectedTermPhase];
+      } else {
+        timetable = data as PhaseTimetableData;
+      }
+
+      availableBlocks = Object.keys(timetable).sort();
+
+      // Trigger default search once data is ready
+      performSearch();
+    } catch (err) {
+      loadError = (err as Error).message || "An unexpected error occurred.";
     } finally {
       loading = false;
     }
   });
 
+  // ─── Search Execution ─────────────────────────────────────────────────────────
+  function performSearch() {
+    if (!timetable) return;
+    const startM = timeStringToMinutes(startTimeStr);
+    const endM = timeStringToMinutes(endTimeStr);
 
+    activeSearchParams = {
+      block: selectedBlock,
+      day: selectedDay,
+      startTimeStr,
+      endTimeStr
+    };
 
-  // ─── Search ────────────────────────────────────────────────────────────────────
-  function search() {
-    if (!scheduleData) return;
-    if (selectedDays.length === 0) {
-      alert("Please select at least one day.");
-      return;
-    }
-    searchLoading = true;
+    searchResults = searchAvailableRooms(
+      timetable,
+      selectedBlock,
+      selectedDay,
+      startM,
+      endM
+    );
     searchTriggered = true;
-    freeRooms = [];
-
-    // Use setTimeout to allow UI to update to loading state
-    setTimeout(() => {
-      try {
-        const queries = selectedDays.map((day) => {
-          const qStart = timeToMinutes(dayQueries[day].start);
-          const qEnd = timeToMinutes(dayQueries[day].end);
-          return { day, start: qStart, end: qEnd };
-        });
-
-        for (const q of queries) {
-          if (isNaN(q.start) || isNaN(q.end) || q.start >= q.end) {
-            alert(
-              `Please enter a valid time range for ${q.day} where end time is after start time.`,
-            );
-            searchLoading = false;
-            return;
-          }
-        }
-
-        freeRooms = findFreeRooms(
-          scheduleData!,
-          queries,
-          termFilter,
-          componentFilter,
-        );
-        applyFilters();
-      } catch (err) {
-        console.error(err);
-      } finally {
-        searchLoading = false;
-      }
-    }, 50);
   }
 
-  function applyFilters() {
-    filteredRooms = freeRooms.filter((r) => r.capacity >= minCapacity);
-    applySorting();
-  }
-
-  function applySorting() {
-    filteredRooms = [...filteredRooms].sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === "capacity") cmp = b.capacity - a.capacity;
-      else cmp = a.room.localeCompare(b.room);
-      return sortDir === "asc" ? -cmp : cmp;
-    });
-  }
-
-  function toggleSort(col: "capacity" | "name") {
-    if (sortBy === col) {
-      sortDir = sortDir === "asc" ? "desc" : "asc";
-    } else {
-      sortBy = col;
-      sortDir = col === "capacity" ? "desc" : "asc";
-    }
-    applySorting();
-  }
-
-  function toggleComponent(comp: string) {
-    if (componentFilter.includes(comp)) {
-      componentFilter = componentFilter.filter((c) => c !== comp);
-    } else {
-      componentFilter = [...componentFilter, comp];
-    }
-  }
-
-  function toggleDay(day: string) {
-    if (selectedDays.includes(day)) {
-      selectedDays = selectedDays.filter((d) => d !== day);
-    } else {
-      selectedDays = [...selectedDays, day];
-    }
-  }
-
-  // ─── Room detail ──────────────────────────────────────────────────────────────
-  function openRoomDetail(room: string) {
-    if (!scheduleData) return;
-    selectedRoom = room;
-    roomDaySchedule = getRoomSchedule(scheduleData, room, selectedDays);
+  // ─── Modal Inspection ─────────────────────────────────────────────────────────
+  function openRoomModal(room: string, block: string, day: string = selectedDay) {
+    if (!timetable) return;
+    modalRoom = room;
+    modalBlock = block;
+    modalDay = day;
+    modalSchedule = getRoomDaySchedule(timetable, block, room, day);
   }
 
   function closeModal() {
-    selectedRoom = null;
+    modalRoom = null;
+    modalSchedule = null;
+  }
+
+  // ─── Suggestion Handlers for Empty State ───────────────────────────────────────
+  function handleSearchAllBlocks() {
+    selectedBlock = "ALL";
+    performSearch();
+  }
+
+  function handleShorterDuration() {
+    const startM = timeStringToMinutes(startTimeStr);
+    const newEndM = Math.min(OPERATING_END, startM + 30);
+    endTimeStr = minutesToTimeString(newEndM);
+    performSearch();
+  }
+
+  function handleChangeTime() {
+    const startM = timeStringToMinutes(startTimeStr);
+    const newStartM = Math.min(OPERATING_END - 60, startM + 60);
+    const newEndM = Math.min(OPERATING_END, newStartM + 60);
+    startTimeStr = minutesToTimeString(newStartM);
+    endTimeStr = minutesToTimeString(newEndM);
+    performSearch();
   }
 </script>
 
-<svelte:head>
-  <title>EmptyRoominator</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link
-    rel="preconnect"
-    href="https://fonts.gstatic.com"
-    crossorigin="anonymous"
-  />
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
-    rel="stylesheet"
-  />
+<Navbar
+  {currentTab}
+  onSelectTab={(tab) => { currentTab = tab; }}
+/>
 
-</svelte:head>
-
-<div class="app">
-  <div class="container">
-    <header class="hero">
-      <h1>EmptyRoominator</h1>
-    </header>
-
-    <div class="card data-card">
-      <div class="card-row">
-        <div class="data-status">
-          {#if loading}
-            <span class="text-muted">Loading timetable data…</span>
-          {:else if loadError}
-            <span class="text-secondary">{loadError}</span>
-          {:else if scheduleData}
-            <span class="text-muted">
-              Loaded {Object.keys(scheduleData.roomCapacities).length} rooms
-            </span>
-          {/if}
+<main class="page-main">
+  <div class="content-container">
+    {#if loading}
+      <div class="status-center">
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="status-text">Loading room schedule data...</p>
+      </div>
+    {:else if loadError}
+      <div class="error-banner" role="alert">
+        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <div>
+          <strong>Unable to load timetable:</strong> {loadError}
         </div>
       </div>
-    </div>
-
-    <div class="card search-card">
-      <div class="filters-grid">
-        <div class="field">
-          <span class="field-label">Days & Times</span>
-          <div class="day-rows">
-            {#each DAYS as day}
-              <div class="day-row">
-                <button
-                  class="pill day-pill {selectedDays.includes(day)
-                    ? 'active'
-                    : ''}"
-                  onclick={() => toggleDay(day)}>{day}</button
-                >
-                {#if selectedDays.includes(day)}
-                  <div class="time-inputs">
-                    <input
-                      type="time"
-                      class="input"
-                      bind:value={dayQueries[day].start}
-                    />
-                    <span class="text-muted">–</span>
-                    <input
-                      type="time"
-                      class="input"
-                      bind:value={dayQueries[day].end}
-                    />
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="term-select">Term</label>
-          <select id="term-select" class="input" bind:value={termFilter}>
-            {#each TERMS as t}
-              <option value={t}>{t === "Any" ? "Any Period" : t}</option>
-            {/each}
-          </select>
-        </div>
-
-        <div class="field">
-          <span class="field-label">Show Room Types</span>
-          <div class="pills">
-            {#each COMPONENTS as comp}
-              <button
-                class="pill {componentFilter.includes(comp) ? 'active' : ''}"
-                onclick={() => toggleComponent(comp)}>{comp}</button
-              >
-            {/each}
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="min-cap">Min Capacity ({minCapacity || "Any"})</label>
-          <input
-            id="min-cap"
-            type="range"
-            class="input range"
-            min="0"
-            max="200"
-            step="5"
-            bind:value={minCapacity}
-            oninput={applyFilters}
+    {:else}
+      {#if currentTab === "search"}
+        <div class="search-view-layout">
+          <SearchPanel
+            {availableBlocks}
+            bind:selectedBlock
+            bind:selectedDay
+            bind:startTimeStr
+            bind:endTimeStr
+            onSearch={performSearch}
           />
-        </div>
-      </div>
 
-      <button
-        class="btn btn-primary search-btn"
-        onclick={search}
-        disabled={!scheduleData || loading || searchLoading}
-      >
-        {#if searchLoading}
-          Searching...
-        {:else}
-          Find Free Rooms
-        {/if}
-      </button>
-    </div>
-
-    {#if searchTriggered}
-      <div class="results">
-        <div class="results-header">
-          <h2 class="text-secondary">{filteredRooms.length} rooms free</h2>
-          {#if filteredRooms.length > 0}
-            <div class="sort-controls">
-              <button
-                class="pill {sortBy === 'capacity' ? 'active' : ''}"
-                onclick={() => toggleSort("capacity")}
-              >
-                Capacity {sortBy === "capacity"
-                  ? sortDir === "desc"
-                    ? "↓"
-                    : "↑"
-                  : ""}
-              </button>
-              <button
-                class="pill {sortBy === 'name' ? 'active' : ''}"
-                onclick={() => toggleSort("name")}
-              >
-                Name {sortBy === "name" ? (sortDir === "asc" ? "↑" : "↓") : ""}
-              </button>
-            </div>
+          {#if searchTriggered}
+            {#if searchResults.length > 0}
+              <ResultsList
+                results={searchResults}
+                selectedBlock={activeSearchParams.block}
+                selectedDay={activeSearchParams.day}
+                startTimeStr={activeSearchParams.startTimeStr}
+                endTimeStr={activeSearchParams.endTimeStr}
+                onSelectRoom={(r, b) => openRoomModal(r, b, activeSearchParams.day)}
+              />
+            {:else}
+              <EmptyState
+                onSearchAllBlocks={selectedBlock !== "ALL" ? handleSearchAllBlocks : undefined}
+                onShorterDuration={handleShorterDuration}
+                onChangeTime={handleChangeTime}
+              />
+            {/if}
           {/if}
         </div>
-
-        <div class="rooms-grid">
-          {#each filteredRooms as room}
-            <button class="room-card" onclick={() => openRoomDetail(room.room)}>
-              <span class="room-name">{room.room}</span>
-              <span class="room-cap">{room.capacity} seats</span>
-            </button>
-          {/each}
-        </div>
-      </div>
+      {:else}
+        {#if timetable}
+          <RoomBrowser
+            {timetable}
+            onSelectRoom={(r, b, d) => openRoomModal(r, b, d)}
+          />
+        {/if}
+      {/if}
     {/if}
   </div>
+</main>
 
-  {#if selectedRoom}
-    <div
-      class="modal-overlay"
-      onclick={(e) => {
-        if ((e.target as HTMLElement).classList.contains("modal-overlay"))
-          closeModal();
-      }}
-      onkeydown={(e) => e.key === "Escape" && closeModal()}
-      role="button"
-      tabindex="0"
-    >
-      <div class="modal">
-        <div class="modal-header">
-          <h2>{selectedRoom}</h2>
-          <button class="btn btn-sm" onclick={closeModal}>Close</button>
-        </div>
-        <div class="modal-body">
-          {#if roomDaySchedule.length === 0}
-            <p class="text-muted">
-              No classes scheduled on {selectedDays.join(", ")}.
-            </p>
-          {:else}
-            <div class="timeline">
-              {#each roomDaySchedule as slot}
-                {@const q = dayQueries[slot.day]}
-                {@const qStart = q ? timeToMinutes(q.start) : -1}
-                {@const qEnd = q ? timeToMinutes(q.end) : -1}
-                <div
-                  class="timeline-item {qStart >= 0 &&
-                  slot.start < qEnd &&
-                  slot.end > qStart
-                    ? 'conflict'
-                    : ''}"
-                >
-                  <span class="text-secondary font-mono"
-                    >{slot.day} • {minutesToTime(slot.start)} – {minutesToTime(
-                      slot.end,
-                    )}</span
-                  >
-                  <span>{slot.course} • {slot.component}</span>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </div>
-    </div>
-  {/if}
-</div>
+{#if modalRoom && modalSchedule}
+  <RoomScheduleModal
+    room={modalRoom}
+    block={modalBlock}
+    day={modalDay}
+    schedule={modalSchedule}
+    onClose={closeModal}
+  />
+{/if}
+
+<Footer />
 
 <style>
-  :global(:root) {
-    --bg: #000000;
-    --bg-card: #0a0a0a;
-    --bg-hover: #111111;
-    --bg-input: #080808;
-    --text: #ffffff;
-    --text-secondary: #888888;
-    --text-muted: #555555;
-    --border: #222222;
-    --border-hover: #333333;
-    --font: "Inter", -apple-system, sans-serif;
-    --font-mono: monospace;
-    --radius: 8px;
+  .page-main {
+    flex: 1;
+    padding: 2rem 1.25rem 3rem;
   }
 
-  :global(*) {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-  :global(body) {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font);
-    line-height: 1.5;
-  }
-
-  .app {
-    min-height: 100vh;
-    padding: 3rem 1.5rem;
-  }
-  .container {
-    max-width: 800px;
+  .content-container {
+    max-width: 1000px;
     margin: 0 auto;
+  }
+
+  .search-view-layout {
     display: flex;
     flex-direction: column;
-    gap: 2rem;
+    gap: 1.75rem;
   }
 
-  .hero h1 {
-    font-size: 2rem;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-  }
-  .card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.5rem;
-  }
-  .card-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.6rem 1rem;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--bg);
-    color: var(--text);
-    cursor: pointer;
-    font-size: 0.85rem;
-  }
-  .btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-hover);
-  }
-  .btn-sm {
-    padding: 0.35rem 0.6rem;
-    font-size: 0.75rem;
-  }
-  .btn-primary {
-    background: var(--text);
-    color: var(--bg);
-    border-color: var(--text);
-    font-weight: 500;
-  }
-  .btn-primary:hover {
-    background: var(--text-secondary);
-    border-color: var(--text-secondary);
-  }
-
-  .filters-grid {
+  .status-center {
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
-    margin-bottom: 1.5rem;
-  }
-  .field label, .field-label {
-    display: block;
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    margin-bottom: 0.5rem;
-  }
-
-  .input {
-    width: 100%;
-    padding: 0.75rem;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-  }
-  .input:focus {
-    outline: none;
-    border-color: var(--text-muted);
-  }
-
-  .day-rows {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-  .day-row {
-    display: flex;
     align-items: center;
-    gap: 0.75rem;
-  }
-  .day-pill {
-    min-width: 52px;
-    text-align: center;
-  }
-  .time-inputs {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1;
-  }
-  .time-inputs .input {
-    flex: 1;
-    padding: 0.5rem 0.6rem;
-    font-size: 0.85rem;
-  }
-
-  .pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .pill {
-    padding: 0.4rem 0.8rem;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-secondary);
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  .pill.active {
-    background: var(--text);
-    color: var(--bg);
-    border-color: var(--text);
-  }
-
-  .search-btn {
-    width: 100%;
     justify-content: center;
-    padding: 1rem;
-  }
-
-  .results-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.5rem;
-  }
-  .sort-controls {
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  .rooms-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    padding: 6rem 1rem;
     gap: 1rem;
-  }
-  .room-card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    cursor: pointer;
-    text-align: left;
-  }
-  .room-card:hover {
-    border-color: var(--border-hover);
-    background: var(--bg-hover);
-  }
-  .room-name {
-    font-weight: 500;
-    font-size: 1.1rem;
-  }
-  .room-cap {
-    color: var(--text-secondary);
-    font-size: 0.85rem;
-  }
-
-  .text-muted {
     color: var(--text-muted);
   }
-  .text-secondary {
-    color: var(--text-secondary);
-  }
-  .font-mono {
-    font-family: var(--font-mono);
+
+  .spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--border-subtle);
+    border-top-color: var(--text-primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
   }
 
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.8);
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .status-text {
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+
+  .error-banner {
     display: flex;
     align-items: center;
-    justify-content: center;
-    z-index: 50;
-    padding: 1.5rem;
-  }
-  .modal {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    width: 100%;
-    max-width: 500px;
-    padding: 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-  .modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .timeline {
-    display: flex;
-    flex-direction: column;
     gap: 0.75rem;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+    padding: 1rem 1.25rem;
+    border-radius: 10px;
+    font-size: 0.875rem;
+    margin-top: 2rem;
   }
-  .timeline-item {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg-input);
-  }
-  .timeline-item.conflict {
-    border-color: #555;
+
+  @media (max-width: 640px) {
+    .page-main {
+      padding: 1.25rem 1rem 2rem;
+    }
   }
 </style>

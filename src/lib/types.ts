@@ -1,30 +1,49 @@
-export interface ScheduleEntry {
-  course: string;
+export interface ClassSession {
+  code: string;
   title: string;
-  component: 'LEC' | 'TUT' | 'PRAC';
-  day: 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat';
-  start: number; // minutes since midnight
-  end: number;   // minutes since midnight
-  room: string;
-  capacity: number;
-  term: 'Full semester' | 'First half' | 'Second half' | 'Both half';
-  instructor: string;
+  start: string; // e.g. "08:00 AM"
+  end: string;   // e.g. "08:55 AM"
+  prof: string;
+  term: string;
 }
 
-export interface ScheduleData {
-  schedule: ScheduleEntry[];
-  roomCapacities: Record<string, number>;
+export interface FreeSlot {
+  start: number; // minutes from midnight (e.g. 480 = 8:00 AM)
+  end: number;   // minutes from midnight (e.g. 1200 = 8:00 PM)
+  duration: number; // in minutes
 }
 
-export interface FreeRoom {
+export interface DaySchedule {
+  classes: ClassSession[];
+  free_slots: FreeSlot[];
+}
+
+export type PhaseTimetableData = Record<string, Record<string, Record<string, DaySchedule>>>;
+
+export type MultiPhaseTimetableData = {
+  first_half: PhaseTimetableData;
+  second_half: PhaseTimetableData;
+};
+
+export type TimetableData = PhaseTimetableData;
+
+export type AvailabilityType = "full" | "partial" | "unavailable";
+
+export interface RoomAvailabilityResult {
   room: string;
-  capacity: number;
+  block: string;
+  status: "full" | "partial";
+  durationAvailable: number; // in minutes
+  freeStart: number;         // in minutes
+  freeEnd: number;           // in minutes
+  nextClassStart?: string;   // formatted time e.g. "11:45 AM"
 }
 
 export interface SearchParams {
-  day: string;
-  startTime: string; // HH:MM
-  endTime: string;   // HH:MM
-  term: string;
-  componentFilter: string[];
+  block: string; // "ALL" or specific block like "A", "B", etc.
+  day: string;   // "Mon", "Tue", ...
+  startTime: string; // "HH:MM" 24h
+  endTime: string;   // "HH:MM" 24h
 }
+
+export type Theme = "system" | "light" | "dark";
